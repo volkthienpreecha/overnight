@@ -21,23 +21,29 @@ export interface RunOptions {
 const MAX_RECENT_LINES = 50
 const CHECKPOINT_INJECT_MARKER = '__overnight_checkpoint_request__'
 
-// Build a resume command for Claude Code when we have a session ID.
-// Drops the original -p / --print flags and adds --resume.
-function buildResumeArgs(originalArgs: string[], sessionId: string): string[] {
-  const stripped = originalArgs.filter((a, i, arr) => {
-    if (a === '-p' || a === '--print') return false
-    if (i > 0 && (arr[i - 1] === '-p' || arr[i - 1] === '--print')) return false
-    return true
-  })
-  return ['--resume', sessionId, ...stripped]
-}
+// ---------------------------------------------------------------------------
+// Agent detection
+// ---------------------------------------------------------------------------
 
 function isClaude(command: string): boolean {
-  return /\bclaude\b/.test(command)
+  return /\bclaude\b/i.test(command)
 }
 
-// Ensure Claude outputs stream-json so overnight can extract the session ID.
-// Without this flag Claude emits human-readable text and we never see the UUID.
+function isCodex(command: string): boolean {
+  return /\bcodex\b/i.test(command)
+}
+
+function isGemini(command: string): boolean {
+  return /\bgemini\b/i.test(command)
+}
+
+// ---------------------------------------------------------------------------
+// Stream-JSON / structured-output injection
+// Each agent has its own flag to emit machine-readable JSONL so overnight
+// can capture the session ID and parse events reliably.
+// ---------------------------------------------------------------------------
+
+// Claude: --output-format stream-json
 function injectStreamJson(args: string[]): { args: string[]; injected: boolean } {
   const alreadySet = args.some(
     (a, i) =>
@@ -47,6 +53,69 @@ function injectStreamJson(args: string[]): { args: string[]; injected: boolean }
   )
   if (alreadySet) return { args, injected: false }
   return { args: ['--output-format', 'stream-json', ...args], injected: true }
+}
+
+// Gemini: --output-format stream-json  (same flag as Claude)
+function injectStreamJsonForGemini(args: string[]): { args: string[]; injected: boolean } {
+  return injectStreamJson(args)
+}
+
+// Codex: --json  (codex exec --json "prompt" emits JSONL; session ID appears
+// in the exit message "run codex exec resume <id>" which detector.ts parses)
+function injectJsonForCodex(args: string[]): { args: string[]; injected: boolean } {
+  if (args.some(a => a === '--json')) return { args, injected: false }
+  if (args[0] === 'exec') {
+    return { args: ['exec', '--json', ...args.slice(1)], injected: true }
+  }
+  // Non-exec (interactive) mode — can't safely inject; user handles output format
+  return { args, injected: false }
+}
+
+// ---------------------------------------------------------------------------
+// Resume-args builders — each agent uses its own resume mechanism
+// ---------------------------------------------------------------------------
+
+// Claude: drops -p / --print and value, prepends --resume SESSION_ID
+function buildResumeArgs(originalArgs: string[], sessionId: string): string[] {
+  const stripped = originalArgs.filter((a, i, arr) => {
+    if (a === '-p' || a === '--print') return false
+    if (i > 0 && (arr[i - 1] === '-p' || arr[i - 1] === '--print')) return false
+    return true
+  })
+  return ['--resume', sessionId, ...stripped]
+}
+
+// Codex: `codex exec resume SESSION_ID [flags]`
+// Drops the positional prompt argument, keeps behavioural flags.
+// Falls back to --last when session ID wasn't captured.
+function buildCodexResumeArgs(originalArgs: string[], sessionId: string | null): string[] {
+  const isExecMode = originalArgs[0] === 'exec'
+  // Keep flags (--dangerously-bypass-approvals-and-sandbox, --approval-mode, etc.)
+  // Drop the positional prompt and --json (we re-add it explicitly)
+  const flags = (isExecMode ? originalArgs.slice(1) : originalArgs).filter(
+    (a, i, arr) => {
+      if (a === '--json') return false                                         // re-added below
+      if (a.startsWith('-')) return true                                       // keep flags
+      if (i > 0 && arr[i - 1].startsWith('-') && !arr[i - 1].startsWith('--approval-mode') === false) return true  // flag value
+      return false                                                             // drop positional prompt
+    },
+  )
+  const resumeTarget = sessionId ? [sessionId] : ['--last']
+  return isExecMode
+    ? ['exec', '--json', 'resume', ...resumeTarget, ...flags]
+    : ['resume', ...resumeTarget]
+}
+
+// Gemini: drops -p / --prompt and value, prepends --resume SESSION_ID
+// Falls back to "latest" when session ID wasn't captured.
+function buildGeminiResumeArgs(originalArgs: string[], sessionId: string | null): string[] {
+  const stripped = originalArgs.filter((a, i, arr) => {
+    if (a === '-p' || a === '--prompt') return false
+    if (i > 0 && (arr[i - 1] === '-p' || arr[i - 1] === '--prompt')) return false
+    return true
+  })
+  const resumeTarget = sessionId ?? 'latest'
+  return ['--resume', resumeTarget, ...stripped]
 }
 
 async function spawnAndWatch(
@@ -247,15 +316,26 @@ async function requestCheckpoint(state: SessionState, config: OvernightConfig): 
 export async function runAgent(options: RunOptions): Promise<void> {
   const { command, args, config, verbose = false } = options
 
-  // For Claude, inject --output-format stream-json so we always capture the
-  // session ID. Without it Claude emits human-readable text only and --resume
-  // is impossible.
+  // Inject structured-output flag so overnight can capture the session ID
+  // and parse events. Each agent has its own flag.
   let baseArgs = [...args]
   if (isClaude(command)) {
     const { args: injected, injected: didInject } = injectStreamJson(baseArgs)
     baseArgs = injected
     if (didInject && verbose) {
       console.log(chalk.dim('  overnight: injected --output-format stream-json (needed for session ID capture)'))
+    }
+  } else if (isGemini(command)) {
+    const { args: injected, injected: didInject } = injectStreamJsonForGemini(baseArgs)
+    baseArgs = injected
+    if (didInject && verbose) {
+      console.log(chalk.dim('  overnight: injected --output-format stream-json for Gemini (needed for session ID capture)'))
+    }
+  } else if (isCodex(command)) {
+    const { args: injected, injected: didInject } = injectJsonForCodex(baseArgs)
+    baseArgs = injected
+    if (didInject && verbose) {
+      console.log(chalk.dim('  overnight: injected --json for Codex (needed for session ID capture)'))
     }
   }
 
@@ -321,17 +401,29 @@ export async function runAgent(options: RunOptions): Promise<void> {
         state.phase = 'resuming'
         state.restarts++
 
-        if (isClaude(command) && state.sessionId) {
-          currentArgs = buildResumeArgs(baseArgs, state.sessionId)
-          console.log(chalk.cyan(`\n⚡ overnight: Resuming session ${state.sessionId.slice(0, 8)}…`))
-          if (verbose) {
-            console.log(chalk.dim(`  resume cmd: ${command} ${currentArgs.join(' ')}`))
+        if (isClaude(command)) {
+          if (state.sessionId) {
+            currentArgs = buildResumeArgs(baseArgs, state.sessionId)
+            console.log(chalk.cyan(`\n⚡ overnight: Resuming Claude session ${state.sessionId.slice(0, 8)}…`))
+          } else {
+            currentArgs = [...baseArgs]
+            console.log(chalk.yellow('  overnight: ⚠ no session ID captured — restarting Claude from scratch (context may be lost)'))
           }
-        } else if (isClaude(command) && !state.sessionId) {
-          currentArgs = [...baseArgs]
-          console.log(chalk.yellow('  overnight: ⚠ no session ID captured — restarting from scratch (context may be lost)'))
+        } else if (isCodex(command)) {
+          currentArgs = buildCodexResumeArgs(baseArgs, state.sessionId)
+          const label = state.sessionId ? state.sessionId.slice(0, 8) + '…' : '--last'
+          console.log(chalk.cyan(`\n⚡ overnight: Resuming Codex session (${label})`))
+        } else if (isGemini(command)) {
+          currentArgs = buildGeminiResumeArgs(baseArgs, state.sessionId)
+          const label = state.sessionId ? state.sessionId.slice(0, 8) + '…' : 'latest'
+          console.log(chalk.cyan(`\n⚡ overnight: Resuming Gemini session (${label})`))
         } else {
           currentArgs = [...baseArgs]
+          console.log(chalk.cyan(`\n⚡ overnight: Restarting after rate limit…`))
+        }
+
+        if (verbose) {
+          console.log(chalk.dim(`  resume cmd: ${command} ${currentArgs.join(' ')}`))
         }
 
         logEvent('resume', `Resuming after rate limit #${rateLimitCount} — session: ${state.sessionId ?? 'unknown'}`, { sessionId: state.sessionId, resumeCmd: `${command} ${currentArgs.join(' ')}` }, state.sessionId ?? undefined)
@@ -381,10 +473,14 @@ export async function runAgent(options: RunOptions): Promise<void> {
 
         if (isClaude(command) && state.sessionId) {
           currentArgs = buildResumeArgs(baseArgs, state.sessionId)
-          if (verbose) console.log(chalk.dim(`  resume cmd: ${command} ${currentArgs.join(' ')}`))
+        } else if (isCodex(command) && state.sessionId) {
+          currentArgs = buildCodexResumeArgs(baseArgs, state.sessionId)
+        } else if (isGemini(command) && state.sessionId) {
+          currentArgs = buildGeminiResumeArgs(baseArgs, state.sessionId)
         } else {
           currentArgs = [...baseArgs]
         }
+        if (verbose) console.log(chalk.dim(`  resume cmd: ${command} ${currentArgs.join(' ')}`))
         continue
       }
     }

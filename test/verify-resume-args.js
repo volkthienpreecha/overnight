@@ -9,6 +9,8 @@
  */
 
 // Replicate the logic from runner.ts so we can test it in isolation
+
+// --- Claude ---
 function buildResumeArgs(originalArgs, sessionId) {
   const stripped = originalArgs.filter((a, i, arr) => {
     if (a === '-p' || a === '--print') return false
@@ -27,6 +29,38 @@ function injectStreamJson(args) {
   )
   if (alreadySet) return { args, injected: false }
   return { args: ['--output-format', 'stream-json', ...args], injected: true }
+}
+
+// --- Codex ---
+function injectJsonForCodex(args) {
+  if (args.some(a => a === '--json')) return { args, injected: false }
+  if (args[0] === 'exec') {
+    return { args: ['exec', '--json', ...args.slice(1)], injected: true }
+  }
+  return { args, injected: false }
+}
+
+function buildCodexResumeArgs(originalArgs, sessionId) {
+  const isExecMode = originalArgs[0] === 'exec'
+  const flags = (isExecMode ? originalArgs.slice(1) : originalArgs).filter(a => {
+    if (a === '--json') return false
+    return a.startsWith('-')
+  })
+  const resumeTarget = sessionId ? [sessionId] : ['--last']
+  return isExecMode
+    ? ['exec', '--json', 'resume', ...resumeTarget, ...flags]
+    : ['resume', ...resumeTarget]
+}
+
+// --- Gemini ---
+function buildGeminiResumeArgs(originalArgs, sessionId) {
+  const stripped = originalArgs.filter((a, i, arr) => {
+    if (a === '-p' || a === '--prompt') return false
+    if (i > 0 && (arr[i - 1] === '-p' || arr[i - 1] === '--prompt')) return false
+    return true
+  })
+  const resumeTarget = sessionId ?? 'latest'
+  return ['--resume', resumeTarget, ...stripped]
 }
 
 let passed = 0
@@ -93,7 +127,67 @@ assert(
   ['--resume', SESSION, '--output-format', 'stream-json']
 )
 
-// --- Full overnight command reconstruction ---
+// --- injectJsonForCodex ---
+
+assert(
+  'injectJsonForCodex: injects --json after exec',
+  injectJsonForCodex(['exec', 'build a feature', '--dangerously-bypass-approvals-and-sandbox']),
+  { args: ['exec', '--json', 'build a feature', '--dangerously-bypass-approvals-and-sandbox'], injected: true }
+)
+
+assert(
+  'injectJsonForCodex: skips if --json already present',
+  injectJsonForCodex(['exec', '--json', 'build a feature']),
+  { args: ['exec', '--json', 'build a feature'], injected: false }
+)
+
+assert(
+  'injectJsonForCodex: skips for non-exec (interactive) mode',
+  injectJsonForCodex(['build a feature']),
+  { args: ['build a feature'], injected: false }
+)
+
+// --- buildCodexResumeArgs ---
+
+assert(
+  'buildCodexResumeArgs: exec mode with session ID — drops prompt, keeps flags',
+  buildCodexResumeArgs(['exec', '--json', 'build a feature', '--dangerously-bypass-approvals-and-sandbox'], 'helpful-gopher-42'),
+  ['exec', '--json', 'resume', 'helpful-gopher-42', '--dangerously-bypass-approvals-and-sandbox']
+)
+
+assert(
+  'buildCodexResumeArgs: exec mode without session ID — uses --last',
+  buildCodexResumeArgs(['exec', '--json', 'build a feature', '--dangerously-bypass-approvals-and-sandbox'], null),
+  ['exec', '--json', 'resume', '--last', '--dangerously-bypass-approvals-and-sandbox']
+)
+
+assert(
+  'buildCodexResumeArgs: non-exec mode with session ID',
+  buildCodexResumeArgs(['build a feature'], 'helpful-gopher-42'),
+  ['resume', 'helpful-gopher-42']
+)
+
+// --- buildGeminiResumeArgs ---
+
+assert(
+  'buildGeminiResumeArgs: drops -p and value, prepends --resume SESSION_ID',
+  buildGeminiResumeArgs(['--output-format', 'stream-json', '-p', 'build a feature', '--sandbox'], SESSION),
+  ['--resume', SESSION, '--output-format', 'stream-json', '--sandbox']
+)
+
+assert(
+  'buildGeminiResumeArgs: drops --prompt and value',
+  buildGeminiResumeArgs(['--prompt', 'build a feature', '--output-format', 'stream-json'], SESSION),
+  ['--resume', SESSION, '--output-format', 'stream-json']
+)
+
+assert(
+  'buildGeminiResumeArgs: uses "latest" when no session ID',
+  buildGeminiResumeArgs(['--output-format', 'stream-json', '-p', 'build a feature'], null),
+  ['--resume', 'latest', '--output-format', 'stream-json']
+)
+
+// --- Full round-trip: Claude ---
 
 // Simulate what overnight does when rate limit fires on:
 //   overnight run -- claude -p "build a feature" --dangerously-skip-permissions
@@ -102,9 +196,35 @@ const { args: withJson } = injectStreamJson(userArgs)
 const resumeArgs = buildResumeArgs(withJson, SESSION)
 
 assert(
-  'Full round-trip: original args → inject json → rate limit → resume command',
+  'Claude round-trip: original args → inject json → rate limit → resume command',
   ['claude', ...resumeArgs].join(' '),
   `claude --resume ${SESSION} --output-format stream-json --dangerously-skip-permissions`
+)
+
+// --- Full round-trip: Codex ---
+
+//   overnight run -- codex exec "build a feature" --dangerously-bypass-approvals-and-sandbox
+const codexUserArgs = ['exec', 'build a feature', '--dangerously-bypass-approvals-and-sandbox']
+const { args: codexWithJson } = injectJsonForCodex(codexUserArgs)
+const codexResumeArgs = buildCodexResumeArgs(codexWithJson, 'helpful-gopher-42')
+
+assert(
+  'Codex round-trip: original args → inject json → rate limit → resume command',
+  ['codex', ...codexResumeArgs].join(' '),
+  'codex exec --json resume helpful-gopher-42 --dangerously-bypass-approvals-and-sandbox'
+)
+
+// --- Full round-trip: Gemini ---
+
+//   overnight run -- gemini -p "build a feature" --sandbox
+const geminiUserArgs = ['-p', 'build a feature', '--sandbox']
+const { args: geminiWithJson } = injectStreamJson(geminiUserArgs)  // same flag as Claude
+const geminiResumeArgs = buildGeminiResumeArgs(geminiWithJson, SESSION)
+
+assert(
+  'Gemini round-trip: original args → inject json → rate limit → resume command',
+  ['gemini', ...geminiResumeArgs].join(' '),
+  `gemini --resume ${SESSION} --output-format stream-json --sandbox`
 )
 
 console.log()

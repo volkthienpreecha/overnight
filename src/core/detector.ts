@@ -1,18 +1,40 @@
 import { Detection, DetectionType } from '../lib/types.js'
 
-// Patterns that indicate Claude Code hit its usage/rate limit
+// Patterns that indicate any supported agent hit its usage/rate limit
 const RATE_LIMIT_PATTERNS = [
+  // --- Claude ---
   /usage limit reached/i,
-  /rate limit/i,
   /resets in \d/i,
-  /try again in/i,
   /exceeded.*limit/i,
   /limit.*exceeded/i,
-  /quota exceeded/i,
-  // Claude Code stream-json format: error result
+  // Claude Code stream-json error result
   /"subtype":"error".*"limit/i,
   // Claude Code text: "Claude usage limit reached · resets in 5 hours"
   /claude.*limit/i,
+
+  // --- Codex (OpenAI) ---
+  // Exact strings from codex-rs/protocol/src/error.rs
+  /you've hit your usage limit/i,
+  /selected model is at capacity/i,
+  /exceeded retry limit/i,
+  /workspace is out of credits/i,
+  /hit your spend cap/i,
+
+  // --- Gemini (Google) ---
+  // From packages/core/src/utils/googleQuotaErrors.ts
+  /RESOURCE_EXHAUSTED/,
+  /you have exhausted your daily quota/i,
+  /RATE_LIMIT_EXCEEDED/,
+  /QUOTA_EXHAUSTED/,
+  /rate limit exceeded for host/i,
+  /please retry in \d/i,
+  /suggested retry after \d/i,
+  /INSUFFICIENT_G1_CREDITS_BALANCE/i,
+
+  // --- Generic (catches OpenAI/Google HTTP errors in any agent) ---
+  /rate limit/i,
+  /quota exceeded/i,
+  /try again in/i,
 ]
 
 // Patterns that indicate the agent completed its task successfully
@@ -38,20 +60,32 @@ const HUMAN_NEEDED_PATTERNS = [
   /are you sure/i,
 ]
 
-// Session ID from Claude Code stream-json: {"type":"system","subtype":"init","session_id":"UUID",...}
+// Session ID from Claude/Gemini stream-json: {"session_id":"UUID"}
 const SESSION_ID_PATTERN = /"session_id"\s*:\s*"([0-9a-f-]{36})"/i
+// camelCase variant used by some agents
+const SESSION_ID_CAMEL_PATTERN = /"sessionId"\s*:\s*"([0-9a-f-]{36})"/i
+// Codex end-of-session message: "To continue this session, run codex exec resume abc-def-123"
+// Thread names are kebab-case words; UUIDs are hex with dashes.
+const CODEX_SESSION_PATTERN = /codex(?:\s+exec)?\s+resume\s+([a-z0-9][a-z0-9_-]{4,})/i
 
-// Reset time from Claude Code text output: "resets in 5 hours" / "resets in 30 minutes"
+// Reset time from Claude text: "resets in 5 hours" / "resets in 30 minutes"
 const RESET_HOURS_PATTERN = /resets in (\d+(?:\.\d+)?)\s*hours?/i
 const RESET_MINUTES_PATTERN = /resets in (\d+)\s*minutes?/i
 const TRY_AGAIN_HOURS_PATTERN = /try again in (\d+(?:\.\d+)?)\s*hours?/i
 const TRY_AGAIN_MINUTES_PATTERN = /try again in (\d+)\s*minutes?/i
+// Gemini: "Please retry in 44.097s" / "Suggested retry after 60s"
+const RETRY_IN_SECONDS_PATTERN = /(?:please\s+)?retry in (\d+(?:\.\d+)?)\s*s\b/i
+const RETRY_AFTER_SECONDS_PATTERN = /retry after\s+(\d+(?:\.\d+)?)\s*s\b/i
+// Codex: "try again at <time>" — too variable to parse reliably; fall back to default
 
 export function detectLine(line: string): Detection[] {
   const detections: Detection[] = []
 
-  // Session ID extraction
-  const sessionMatch = SESSION_ID_PATTERN.exec(line)
+  // Session ID extraction — try all known formats
+  const sessionMatch =
+    SESSION_ID_PATTERN.exec(line) ??
+    SESSION_ID_CAMEL_PATTERN.exec(line) ??
+    CODEX_SESSION_PATTERN.exec(line)
   if (sessionMatch) {
     detections.push({ type: 'session_id', value: sessionMatch[1], raw: line })
   }
@@ -81,7 +115,7 @@ export function detectLine(line: string): Detection[] {
 }
 
 export function extractResetTime(text: string): number | null {
-  // "resets in X hours"
+  // "resets in X hours" (Claude)
   let m = RESET_HOURS_PATTERN.exec(text)
   if (m) return Date.now() + parseFloat(m[1]) * 3600 * 1000
 
@@ -94,11 +128,21 @@ export function extractResetTime(text: string): number | null {
   m = TRY_AGAIN_MINUTES_PATTERN.exec(text)
   if (m) return Date.now() + parseInt(m[1]) * 60 * 1000
 
+  // "Please retry in 44.097s" / "Suggested retry after 60s" (Gemini)
+  m = RETRY_IN_SECONDS_PATTERN.exec(text)
+  if (m) return Date.now() + parseFloat(m[1]) * 1000
+
+  m = RETRY_AFTER_SECONDS_PATTERN.exec(text)
+  if (m) return Date.now() + parseFloat(m[1]) * 1000
+
   return null
 }
 
 export function extractSessionId(line: string): string | null {
-  const m = SESSION_ID_PATTERN.exec(line)
+  const m =
+    SESSION_ID_PATTERN.exec(line) ??
+    SESSION_ID_CAMEL_PATTERN.exec(line) ??
+    CODEX_SESSION_PATTERN.exec(line)
   return m ? m[1] : null
 }
 
