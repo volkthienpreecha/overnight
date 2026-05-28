@@ -1,0 +1,48 @@
+{
+  "name": "overnight",
+  "version": "0.1.0",
+  "description": "Keep your coding agent running while you sleep — rate-limit recovery, checkpoint summaries, crash detection, and Telegram/Slack alerts.",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "coding-agent",
+    "automation",
+    "overnight",
+    "watchdog",
+    "rate-limit",
+    "unattended"
+  ],
+  "homepage": "https://github.com/volkthienpreecha/agent-watch",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/volkthienpreecha/agent-watch.git"
+  },
+  "license": "MIT",
+  "bin": {
+    "overnight": "./bin/overnight.js"
+  },
+  "main": "./dist/cli.js",
+  "files": [
+    "bin",
+    "dist",
+    "hooks"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.8.2",
+    "chalk": "^4.1.2",
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsup": "^8.1.0",
+    "typescript": "^5.4.5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
