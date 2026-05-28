@@ -13,13 +13,17 @@ program
 program
   .command('run')
   .description('Run an agent command with overnight supervision')
-  .option('-v, --verbose', 'Show extra overnight status messages')
+  .option('-v, --verbose', 'Show extra overnight status messages (session ID, resume cmd)')
+  .option('--hang-timeout <seconds>', 'Override hang detection timeout in seconds (default: 600)')
   .allowUnknownOption()
   .passThroughOptions()
   .action(async (opts, cmd) => {
     const { runCommand } = await import('./commands/run.js')
     const remaining = cmd.args
-    await runCommand(remaining, { verbose: opts.verbose })
+    await runCommand(remaining, {
+      verbose: opts.verbose,
+      hangTimeout: opts.hangTimeout ? parseInt(opts.hangTimeout) : undefined,
+    })
   })
 
 // overnight setup [--telegram] [--slack] [--uninstall]

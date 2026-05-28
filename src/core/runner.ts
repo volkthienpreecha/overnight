@@ -247,10 +247,22 @@ async function requestCheckpoint(state: SessionState, config: OvernightConfig): 
 export async function runAgent(options: RunOptions): Promise<void> {
   const { command, args, config, verbose = false } = options
 
+  // For Claude, inject --output-format stream-json so we always capture the
+  // session ID. Without it Claude emits human-readable text only and --resume
+  // is impossible.
+  let baseArgs = [...args]
+  if (isClaude(command)) {
+    const { args: injected, injected: didInject } = injectStreamJson(baseArgs)
+    baseArgs = injected
+    if (didInject && verbose) {
+      console.log(chalk.dim('  overnight: injected --output-format stream-json (needed for session ID capture)'))
+    }
+  }
+
   const state: SessionState = {
     sessionId: null,
     command,
-    args,
+    args: baseArgs,
     startedAt: Date.now(),
     restarts: 0,
     rateLimitResetAt: null,
@@ -259,9 +271,9 @@ export async function runAgent(options: RunOptions): Promise<void> {
     phase: 'running',
   }
 
-  logEvent('start', `overnight run: ${command} ${args.join(' ')}`)
+  logEvent('start', `overnight run: ${command} ${baseArgs.join(' ')}`)
 
-  let currentArgs = [...args]
+  let currentArgs = [...baseArgs]
   let crashCount = 0        // only consecutive crashes; resets after a successful rate-limit resume
   let rateLimitCount = 0    // total rate-limit events this session
 
@@ -310,13 +322,19 @@ export async function runAgent(options: RunOptions): Promise<void> {
         state.restarts++
 
         if (isClaude(command) && state.sessionId) {
-          currentArgs = buildResumeArgs(args, state.sessionId)
+          currentArgs = buildResumeArgs(baseArgs, state.sessionId)
           console.log(chalk.cyan(`\n⚡ overnight: Resuming session ${state.sessionId.slice(0, 8)}…`))
+          if (verbose) {
+            console.log(chalk.dim(`  resume cmd: ${command} ${currentArgs.join(' ')}`))
+          }
+        } else if (isClaude(command) && !state.sessionId) {
+          currentArgs = [...baseArgs]
+          console.log(chalk.yellow('  overnight: ⚠ no session ID captured — restarting from scratch (context may be lost)'))
         } else {
-          currentArgs = [...args]
+          currentArgs = [...baseArgs]
         }
 
-        logEvent('resume', `Resuming after rate limit #${rateLimitCount}`, { sessionId: state.sessionId }, state.sessionId ?? undefined)
+        logEvent('resume', `Resuming after rate limit #${rateLimitCount} — session: ${state.sessionId ?? 'unknown'}`, { sessionId: state.sessionId, resumeCmd: `${command} ${currentArgs.join(' ')}` }, state.sessionId ?? undefined)
         await notify(config, {
           type: 'resume',
           message: `Rate limit reset — resuming now (limit #${rateLimitCount})`,
@@ -362,9 +380,10 @@ export async function runAgent(options: RunOptions): Promise<void> {
         await new Promise(r => setTimeout(r, delay))
 
         if (isClaude(command) && state.sessionId) {
-          currentArgs = buildResumeArgs(args, state.sessionId)
+          currentArgs = buildResumeArgs(baseArgs, state.sessionId)
+          if (verbose) console.log(chalk.dim(`  resume cmd: ${command} ${currentArgs.join(' ')}`))
         } else {
-          currentArgs = [...args]
+          currentArgs = [...baseArgs]
         }
         continue
       }

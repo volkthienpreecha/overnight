@@ -4,6 +4,7 @@ import { runAgent } from '../core/runner.js'
 
 export interface RunCommandOptions {
   verbose?: boolean
+  hangTimeout?: number   // seconds, overrides config (useful for testing)
 }
 
 export async function runCommand(
@@ -18,6 +19,10 @@ export async function runCommand(
 
   const [command, ...args] = cmdAndArgs
   const config = readConfig()
+
+  if (opts.hangTimeout) {
+    config.hangTimeoutMs = opts.hangTimeout * 1000
+  }
 
   console.log(chalk.dim(`🌙 overnight: watching ${command} ${args.join(' ')}`))
   if (!config.notifications.telegram && !config.notifications.slack) {
