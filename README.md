@@ -1,83 +1,73 @@
 # overnight
 
-> Keep your coding agent running while you sleep.
+Claude Code stops when it hits a rate limit. You wake up, nothing got done.
 
-Rate-limit recovery · checkpoint summaries · crash detection · Telegram/Slack alerts · **Windows support**
-
----
-
-## The problem
-
-Claude Code stops when it hits a usage limit, crashes, or hangs. You have to babysit the terminal or lose progress. Every existing tool solves only the rate-limit case, and only on macOS/Linux via tmux output-scraping.
-
-overnight solves the whole problem — cross-platform, installable as an npm package, with a 5-step Telegram setup wizard.
+`overnight` wraps your agent and handles it. Rate limits, crashes, hangs. When the limit clears it picks up right where it left off using the actual session ID, not a restart from scratch. Works on Windows without tmux or WSL.
 
 ## Install
 
 ```bash
-npm install -g overnight
+npm install -g overnight-cli
 ```
+
+The command is still `overnight`.
 
 ## Quick start
 
 ```bash
-# 1. Configure notifications (optional but recommended)
+# Optional but worth it: set up Telegram so it pings you
 overnight setup --telegram
 
-# 2. Run your agent
-overnight run -- claude -p "Build feature X in my codebase" --dangerously-skip-permissions
+# Then just prefix your normal claude command
+overnight run -- claude -p "Build feature X" --dangerously-skip-permissions
 ```
 
-That's it. Go to sleep. overnight handles everything else.
+That's it. Go to sleep.
 
 ## What it does
 
-| Scenario | overnight behavior |
+| Situation | What overnight does |
 |---|---|
-| Rate limit hit | Saves checkpoint, waits for reset, resumes with `--resume SESSION_ID` |
-| Claude crashes (non-zero exit) | Restarts up to 3× with backoff, uses `--resume` to preserve context |
-| No output for 10 min | Sends alert — "agent may be stuck" — with last 30 lines |
-| Needs human input (auth, merge conflict, y/n prompt) | Sends alert immediately |
-| Task completes | Sends success notification |
+| Rate limit | Waits for the reset, resumes with `--resume SESSION_ID` |
+| Crash | Restarts up to 3 times, uses `--resume` to keep context |
+| No output for 10 min | Sends an alert with the last 30 lines |
+| Auth prompt / merge conflict / y-n question | Sends an alert right away |
+| Task finishes | Sends a success ping |
 
-## Why it's different
+## Works with Claude, Codex, and Gemini
 
-| Feature | claude-auto-retry | autoclaude | **overnight** |
+Each agent uses its own native resume so you don't lose context on a long task.
+
+| | Claude Code | Codex CLI | Gemini CLI |
+|---|---|---|---|
+| Rate-limit detection | ✅ | ✅ | ✅ |
+| Resumes same session | ✅ `--resume SESSION_ID` | ✅ `exec resume SESSION_ID` | ✅ `--resume SESSION_ID` |
+| Parses exact wait time | ✅ | ✅ | ✅ |
+| Auto-injects JSON output | ✅ `--output-format stream-json` | ✅ `--json` | ✅ `--output-format stream-json` |
+
+## How overnight compares
+
+| Feature | claude-auto-retry | autoclaude | overnight |
 |---|---|---|---|
 | Rate-limit recovery | ✅ | ✅ | ✅ |
 | Checkpoint before pause | ❌ | ❌ | ✅ |
 | Crash recovery + resume | ❌ | ❌ | ✅ |
 | Hang detection | ❌ | ❌ | ✅ |
-| Human-needed escalation | ❌ | ❌ | ✅ |
-| Telegram/Slack alerts | ❌ | ❌ | ✅ |
-| **Windows support** | ❌ | ❌ | ✅ |
-| npm installable | ❌ | ❌ | ✅ |
-| Hook-based (not output scraping) | ❌ | ❌ | ✅ |
+| Human-needed alerts | ❌ | ❌ | ✅ |
+| Telegram / Slack | ❌ | ❌ | ✅ |
+| Windows support | ❌ | ❌ | ✅ |
+| npm install | ❌ | ❌ | ✅ |
+| No tmux required | ❌ | ❌ | ✅ |
 
 ## How it works
 
-overnight wraps your agent command as a child process and pipes all output through to your terminal normally. In the background it:
+overnight spawns your agent as a child process and pipes the output through normally. In the background it:
 
-1. **Parses output** for rate-limit text patterns and extracts the session ID from Claude Code's JSON stream format
-2. **Reads the statusLine hook** (optional, installs via `overnight setup`) for exact rate-limit timestamps from Claude Code's structured data instead of guessing from text
-3. **On rate limit**: saves the last 30 lines as a checkpoint, waits until reset time, then runs `claude --resume SESSION_ID` to pick up exactly where it left off — full conversation history intact
-4. **On crash**: waits with exponential backoff, resumes or restarts
-5. **On hang**: monitors for human-needed patterns (password prompts, merge conflicts, y/n questions) and alerts before the session is stuck for hours
-
-## Commands
-
-```bash
-overnight run -- <cmd> [args]    # Run any command with supervision
-overnight setup                   # Interactive setup wizard
-overnight setup --telegram        # Set up Telegram notifications
-overnight setup --slack           # Set up Slack notifications
-overnight status                  # Show config and recent events
-overnight log                     # Show event history
-overnight log --tail 20           # Last 20 events
-overnight checkpoint list         # List saved checkpoints
-overnight checkpoint show         # Show latest checkpoint
-overnight uninstall               # Remove config and hooks
-```
+1. Injects `--output-format stream-json` (or the equivalent for each agent) so it can read the session ID from the output
+2. Watches for rate-limit messages using patterns sourced from each agent's actual error strings
+3. On rate limit: saves the last 30 lines as a checkpoint, waits until the exact reset time, then runs `claude --resume SESSION_ID` (or the Codex / Gemini equivalent) to continue the same session
+4. On crash: backs off and restarts, reusing `--resume` if a session ID was captured
+5. On silence: monitors for auth prompts, merge conflicts, and other patterns that mean the agent is stuck
 
 ## Telegram setup (5 steps)
 
@@ -85,40 +75,51 @@ overnight uninstall               # Remove config and hooks
 overnight setup --telegram
 ```
 
-1. Message [@BotFather](https://t.me/botfather) → `/newbot` → copy token
-2. Paste token into the wizard
-3. Message your new bot (any text)
+1. Message [@BotFather](https://t.me/botfather) on Telegram, send `/newbot`, copy the token
+2. Paste the token into the wizard
+3. Send any message to your new bot
 4. overnight captures your chat ID automatically
-5. Test notification sent — done
+5. Test message sent
 
-## Notifications
+## Commands
 
-Notification sent when:
-- Rate limit hit (with resume time)
-- Resumed after waiting
-- Crashed (with restart count)
-- Stuck or needs human input (with last 30 lines)
-- Task completed
+```bash
+overnight run -- <command> [args]   # Watch any agent command
+overnight setup --telegram          # Set up Telegram
+overnight setup --slack             # Set up Slack
+overnight status                    # Show config and recent events
+overnight log                       # Full event history
+overnight log --tail 20             # Last 20 events
+overnight log --type rate_limit     # Filter by event type
+overnight checkpoint list           # List saved checkpoints
+overnight checkpoint show           # Show the latest checkpoint
+overnight uninstall                 # Remove config and hooks
+```
 
-## Claude Code statusLine hook
+## Flags for overnight run
 
-`overnight setup` optionally installs a hook into `~/.claude/settings.json`:
+```bash
+overnight run -v -- claude ...              # Verbose: shows session ID and resume command
+overnight run --hang-timeout 30 -- ...      # Alert if no output for 30 seconds (good for testing)
+```
+
+## Claude Code status bar hook
+
+`overnight setup` can install a hook into `~/.claude/settings.json`:
 
 ```json
 { "statusLine": "~/.overnight/hook.js" }
 ```
 
-This hook receives session data from Claude Code after every response and writes the exact rate-limit reset timestamp to `~/.overnight/status.json`. This makes overnight's wait time accurate instead of estimated.
-
-The hook also displays context usage in Claude Code's status bar: `🌙 overnight | ctx: 73%`
+This makes overnight read the exact rate-limit reset time from Claude's structured data instead of parsing text. It also shows context usage in Claude's status bar: `🌙 overnight | ctx: 73%`
 
 ## Windows
 
-overnight works on Windows PowerShell and Command Prompt without tmux or WSL. Process spawning, output piping, and Claude Code's `--resume` flag all work natively on Windows.
+Works on Windows PowerShell and Command Prompt without any extra setup. No tmux, no WSL, no admin rights needed.
 
 ## Contributing
 
-Built with TypeScript + Node.js 18+. No native modules. Cross-platform by design.
+Node.js 18+, TypeScript, no native modules.
 
 ```bash
 git clone https://github.com/volkthienpreecha/agent-watch
@@ -126,6 +127,16 @@ cd agent-watch
 npm install
 npm run build
 node dist/cli.js run -- echo "test"
+```
+
+To test specific features:
+
+```bash
+node test/verify-resume-args.js                                    # Unit tests for resume logic
+node dist/cli.js run -- node test/simulate-crash-then-complete.js  # Crash recovery
+node dist/cli.js run --hang-timeout 5 -- node test/simulate-hang.js  # Hang detection
+node dist/cli.js run -- node test/simulate-codex-rate-limit.js     # Codex rate limit
+node dist/cli.js run -- node test/simulate-gemini-rate-limit.js    # Gemini rate limit
 ```
 
 ## License

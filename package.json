@@ -1,16 +1,19 @@
 {
-  "name": "overnight",
+  "name": "overnight-cli",
   "version": "0.1.0",
-  "description": "Keep your coding agent running while you sleep — rate-limit recovery, checkpoint summaries, crash detection, and Telegram/Slack alerts.",
+  "description": "Keep your coding agent running while you sleep. Rate-limit recovery, crash detection, Telegram/Slack alerts. Works with Claude, Codex, and Gemini.",
   "keywords": [
     "claude",
     "claude-code",
+    "codex",
+    "gemini",
     "coding-agent",
     "automation",
     "overnight",
     "watchdog",
     "rate-limit",
-    "unattended"
+    "unattended",
+    "windows"
   ],
   "homepage": "https://github.com/volkthienpreecha/agent-watch",
   "repository": {
