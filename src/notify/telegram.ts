@@ -28,6 +28,16 @@ export async function pollTelegramForChatId(
   const deadline = Date.now() + timeoutMs
   let offset = 0
 
+  // Ignore stale messages so setup binds to the message the user sends now,
+  // not an old group/chat that talked to the bot earlier.
+  const initial = await fetch(`${TELEGRAM_API}/bot${botToken}/getUpdates?timeout=0`)
+  if (initial.ok) {
+    const data = (await initial.json()) as { ok: boolean; result: Array<{ update_id: number }> }
+    if (data.ok && data.result.length > 0) {
+      offset = Math.max(...data.result.map(update => update.update_id)) + 1
+    }
+  }
+
   while (Date.now() < deadline) {
     const url = `${TELEGRAM_API}/bot${botToken}/getUpdates?offset=${offset}&timeout=10`
     const res = await fetch(url)

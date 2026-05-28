@@ -37,6 +37,41 @@ function isGemini(command: string): boolean {
   return /\bgemini\b/i.test(command)
 }
 
+function formatDuration(ms: number): string {
+  if (ms < 60_000) {
+    return `${Math.max(1, Math.round(ms / 1000))}s`
+  }
+  return `${Math.round(ms / 60_000)} min`
+}
+
+function terminateProcessTree(proc: ChildProcess): void {
+  if (!proc.pid) return
+
+  const releaseHandles = (): void => {
+    try { proc.stdout?.destroy() } catch { /* ignore */ }
+    try { proc.stderr?.destroy() } catch { /* ignore */ }
+    try { proc.stdin?.destroy() } catch { /* ignore */ }
+    try { proc.unref() } catch { /* ignore */ }
+  }
+
+  if (process.platform === 'win32') {
+    const killer = spawn('taskkill', ['/pid', String(proc.pid), '/t', '/f'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+    killer.on('error', () => {
+      try { proc.kill() } catch { /* ignore */ }
+    })
+    killer.unref()
+    try { proc.kill() } catch { /* ignore */ }
+    releaseHandles()
+    return
+  }
+
+  try { proc.kill('SIGTERM') } catch { /* ignore */ }
+  releaseHandles()
+}
+
 // ---------------------------------------------------------------------------
 // Stream-JSON / structured-output injection
 // Each agent has its own flag to emit machine-readable JSONL so overnight
@@ -45,7 +80,7 @@ function isGemini(command: string): boolean {
 
 // Claude: --output-format stream-json
 // When -p / --print is present, Claude also requires --verbose for stream-json to work.
-function injectStreamJson(args: string[]): { args: string[]; injected: boolean } {
+function injectStreamJson(args: string[], addVerboseForPrint = false): { args: string[]; injected: boolean } {
   const alreadySet = args.some(
     (a, i) =>
       a === '--output-format' ||
@@ -57,7 +92,7 @@ function injectStreamJson(args: string[]): { args: string[]; injected: boolean }
   const hasPrint = args.some(a => a === '-p' || a === '--print')
   const hasVerbose = args.some(a => a === '--verbose')
   const toInject = ['--output-format', 'stream-json']
-  if (hasPrint && !hasVerbose) toInject.push('--verbose')
+  if (addVerboseForPrint && hasPrint && !hasVerbose) toInject.push('--verbose')
 
   return { args: [...toInject, ...args], injected: true }
 }
@@ -97,16 +132,45 @@ function buildResumeArgs(originalArgs: string[], sessionId: string): string[] {
 // Falls back to --last when session ID wasn't captured.
 function buildCodexResumeArgs(originalArgs: string[], sessionId: string | null): string[] {
   const isExecMode = originalArgs[0] === 'exec'
-  // Keep flags (--dangerously-bypass-approvals-and-sandbox, --approval-mode, etc.)
-  // Drop the positional prompt and --json (we re-add it explicitly)
-  const flags = (isExecMode ? originalArgs.slice(1) : originalArgs).filter(
-    (a, i, arr) => {
-      if (a === '--json') return false                                         // re-added below
-      if (a.startsWith('-')) return true                                       // keep flags
-      if (i > 0 && arr[i - 1].startsWith('-') && !arr[i - 1].startsWith('--approval-mode') === false) return true  // flag value
-      return false                                                             // drop positional prompt
-    },
-  )
+  const valueFlags = new Set([
+    '-C',
+    '-c',
+    '-m',
+    '--ask-for-approval',
+    '--cd',
+    '--config',
+    '--cwd',
+    '--model',
+    '--profile',
+    '--sandbox',
+    '--search',
+    '--approval-mode',
+    '--approval-policy',
+  ])
+
+  // Keep behavioral flags and their values, but drop the original positional
+  // prompt because `codex exec resume <session>` supplies the prior session.
+  const flags: string[] = []
+  const source = isExecMode ? originalArgs.slice(1) : originalArgs
+  let droppedPrompt = false
+  for (let i = 0; i < source.length; i++) {
+    const arg = source[i]
+    if (arg === '--json') continue
+
+    if (arg.startsWith('-')) {
+      flags.push(arg)
+      const flagName = arg.includes('=') ? arg.slice(0, arg.indexOf('=')) : arg
+      if (valueFlags.has(flagName) && !arg.includes('=') && source[i + 1] && !source[i + 1].startsWith('-')) {
+        flags.push(source[i + 1])
+        i++
+      }
+      continue
+    }
+
+    if (!droppedPrompt) {
+      droppedPrompt = true
+    }
+  }
   const resumeTarget = sessionId ? [sessionId] : ['--last']
   return isExecMode
     ? ['exec', '--json', 'resume', ...resumeTarget, ...flags]
@@ -142,22 +206,34 @@ async function spawnAndWatch(
     let rateLimitDetected = false
     let humanNeededAlerted = false
     let hangTimer: NodeJS.Timeout | null = null
+    let settled = false
+
+    const finish = (reason: 'rate_limit' | 'complete' | 'crash' | 'hang'): void => {
+      if (settled) return
+      settled = true
+      if (hangTimer) clearTimeout(hangTimer)
+      resolve(reason)
+    }
 
     // Reset hang timer on any output
     const resetHangTimer = (): void => {
+      if (settled) return
       if (hangTimer) clearTimeout(hangTimer)
       hangTimer = setTimeout(async () => {
+        if (settled) return
         if (rateLimitDetected) return // don't double-alert
         const snippet = state.recentLines.slice(-5).join('\n')
-        console.log(chalk.yellow('\n⚠️  overnight: No output for ' + Math.round(config.hangTimeoutMs / 60000) + ' min'))
+        const waitLabel = formatDuration(config.hangTimeoutMs)
+        console.log(chalk.yellow('\n⚠️  overnight: No output for ' + waitLabel))
         logEvent('hang', 'No output for hang timeout', { hangTimeoutMs: config.hangTimeoutMs }, state.sessionId ?? undefined)
         await notify(config, {
           type: 'human_needed',
-          message: `No output for ${Math.round(config.hangTimeoutMs / 60000)} min — agent may be stuck`,
+          message: `No output for ${waitLabel} — agent may be stuck`,
           snippet,
           sessionId: state.sessionId ?? undefined,
         })
-        resolve('hang')
+        terminateProcessTree(proc)
+        finish('hang')
       }, config.hangTimeoutMs)
     }
 
@@ -213,9 +289,8 @@ async function spawnAndWatch(
           }
 
           case 'complete':
-            if (hangTimer) clearTimeout(hangTimer)
             state.phase = 'complete'
-            resolve('complete')
+            finish('complete')
             break
 
           case 'human_needed':
@@ -288,18 +363,18 @@ async function spawnAndWatch(
       flush(stderrBuf)
 
       if (rateLimitDetected) {
-        resolve('rate_limit')
+        finish('rate_limit')
       } else if (code === 0 || state.phase === 'complete') {
-        resolve('complete')
+        finish('complete')
       } else {
-        resolve('crash')
+        finish('crash')
       }
     })
 
     proc.on('error', (err) => {
       if (hangTimer) clearTimeout(hangTimer)
       console.error(chalk.red(`\n💥 overnight: Failed to start process: ${err.message}`))
-      resolve('crash')
+      finish('crash')
     })
   })
 }
@@ -327,7 +402,7 @@ export async function runAgent(options: RunOptions): Promise<void> {
   // and parse events. Each agent has its own flag.
   let baseArgs = [...args]
   if (isClaude(command)) {
-    const { args: injected, injected: didInject } = injectStreamJson(baseArgs)
+    const { args: injected, injected: didInject } = injectStreamJson(baseArgs, true)
     baseArgs = injected
     if (didInject && verbose) {
       console.log(chalk.dim('  overnight: injected --output-format stream-json (needed for session ID capture)'))

@@ -79,8 +79,20 @@ const TRY_AGAIN_MINUTES_PATTERN = /try again in (\d+)\s*minutes?/i
 // Gemini: "Please retry in 44.097s" / "Suggested retry after 60s"
 const RETRY_IN_SECONDS_PATTERN = /(?:please\s+)?retry in (\d+(?:\.\d+)?)\s*s\b/i
 const RETRY_AFTER_SECONDS_PATTERN = /retry after\s+(\d+(?:\.\d+)?)\s*s\b/i
-// Codex: "try again at <time>" — too variable to parse reliably; fall back to default
+const TRY_AGAIN_AT_CLOCK_PATTERN = /try again at\s+(\d{1,2})(?::(\d{2}))?\s*(AM|PM)\b/i
+const TRY_AGAIN_AT_24H_PATTERN = /try again at\s+(\d{1,2}):(\d{2})\b/i
 
+function nextLocalClockTime(hour: number, minute: number): number | null {
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null
+
+  const now = new Date()
+  const next = new Date(now)
+  next.setHours(hour, minute, 0, 0)
+  if (next.getTime() <= now.getTime()) {
+    next.setDate(next.getDate() + 1)
+  }
+  return next.getTime()
+}
 export function detectLine(line: string): Detection[] {
   const detections: Detection[] = []
 
@@ -139,6 +151,24 @@ export function extractResetTime(text: string): number | null {
   m = RETRY_AFTER_SECONDS_PATTERN.exec(text)
   if (m) return Date.now() + parseFloat(m[1]) * 1000
 
+  // Codex commonly says: "try again at 11:00 PM." Treat that as the next
+  // occurrence of the local wall-clock time instead of falling back to 5 hours.
+  m = TRY_AGAIN_AT_CLOCK_PATTERN.exec(text)
+  if (m) {
+    let hour = parseInt(m[1], 10)
+    const minute = m[2] ? parseInt(m[2], 10) : 0
+    const meridiem = m[3].toUpperCase()
+    if (hour < 1 || hour > 12) return null
+    if (meridiem === 'PM' && hour !== 12) hour += 12
+    if (meridiem === 'AM' && hour === 12) hour = 0
+    return nextLocalClockTime(hour, minute)
+  }
+
+  m = TRY_AGAIN_AT_24H_PATTERN.exec(text)
+  if (m) {
+    return nextLocalClockTime(parseInt(m[1], 10), parseInt(m[2], 10))
+  }
+
   return null
 }
 
@@ -163,7 +193,7 @@ export function defaultResetTime(): number {
 
 export function formatResetIn(resetAt: number): string {
   const ms = resetAt - Date.now()
-  if (ms <= 0) return 'now'
+  if (ms <= 1000) return 'now'
   const h = Math.floor(ms / 3600000)
   const m = Math.floor((ms % 3600000) / 60000)
   const s = Math.floor((ms % 60000) / 1000)

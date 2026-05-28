@@ -20,7 +20,7 @@ function buildResumeArgs(originalArgs, sessionId) {
   return ['--resume', sessionId, ...stripped]
 }
 
-function injectStreamJson(args) {
+function injectStreamJson(args, addVerboseForPrint = false) {
   const alreadySet = args.some(
     (a, i) =>
       a === '--output-format' ||
@@ -28,7 +28,11 @@ function injectStreamJson(args) {
       (i > 0 && (args[i - 1] === '--output-format' || args[i - 1] === '-f') && a === 'stream-json'),
   )
   if (alreadySet) return { args, injected: false }
-  return { args: ['--output-format', 'stream-json', ...args], injected: true }
+  const hasPrint = args.some(a => a === '-p' || a === '--print')
+  const hasVerbose = args.some(a => a === '--verbose')
+  const toInject = ['--output-format', 'stream-json']
+  if (addVerboseForPrint && hasPrint && !hasVerbose) toInject.push('--verbose')
+  return { args: [...toInject, ...args], injected: true }
 }
 
 // --- Codex ---
@@ -42,10 +46,38 @@ function injectJsonForCodex(args) {
 
 function buildCodexResumeArgs(originalArgs, sessionId) {
   const isExecMode = originalArgs[0] === 'exec'
-  const flags = (isExecMode ? originalArgs.slice(1) : originalArgs).filter(a => {
-    if (a === '--json') return false
-    return a.startsWith('-')
-  })
+  const valueFlags = new Set([
+    '-C',
+    '-c',
+    '-m',
+    '--ask-for-approval',
+    '--cd',
+    '--config',
+    '--cwd',
+    '--model',
+    '--profile',
+    '--sandbox',
+    '--search',
+    '--approval-mode',
+    '--approval-policy',
+  ])
+  const flags = []
+  const source = isExecMode ? originalArgs.slice(1) : originalArgs
+  let droppedPrompt = false
+  for (let i = 0; i < source.length; i++) {
+    const arg = source[i]
+    if (arg === '--json') continue
+    if (arg.startsWith('-')) {
+      flags.push(arg)
+      const flagName = arg.includes('=') ? arg.slice(0, arg.indexOf('=')) : arg
+      if (valueFlags.has(flagName) && !arg.includes('=') && source[i + 1] && !source[i + 1].startsWith('-')) {
+        flags.push(source[i + 1])
+        i++
+      }
+      continue
+    }
+    if (!droppedPrompt) droppedPrompt = true
+  }
   const resumeTarget = sessionId ? [sessionId] : ['--last']
   return isExecMode
     ? ['exec', '--json', 'resume', ...resumeTarget, ...flags]
@@ -85,8 +117,8 @@ const SESSION = '9a5b1f83-dead-beef-cafe-c3d4e5f67890'
 
 assert(
   'injectStreamJson: injects when missing',
-  injectStreamJson(['-p', 'build a feature', '--dangerously-skip-permissions']),
-  { args: ['--output-format', 'stream-json', '-p', 'build a feature', '--dangerously-skip-permissions'], injected: true }
+  injectStreamJson(['-p', 'build a feature', '--dangerously-skip-permissions'], true),
+  { args: ['--output-format', 'stream-json', '--verbose', '-p', 'build a feature', '--dangerously-skip-permissions'], injected: true }
 )
 
 assert(
@@ -105,8 +137,8 @@ assert(
 
 assert(
   'buildResumeArgs: drops -p and its value, adds --resume',
-  buildResumeArgs(['--output-format', 'stream-json', '-p', 'build a feature', '--dangerously-skip-permissions'], SESSION),
-  ['--resume', SESSION, '--output-format', 'stream-json', '--dangerously-skip-permissions']
+  buildResumeArgs(['--output-format', 'stream-json', '--verbose', '-p', 'build a feature', '--dangerously-skip-permissions'], SESSION),
+  ['--resume', SESSION, '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions']
 )
 
 assert(
@@ -167,6 +199,12 @@ assert(
   ['resume', 'helpful-gopher-42']
 )
 
+assert(
+  'buildCodexResumeArgs: keeps flags with values',
+  buildCodexResumeArgs(['exec', '--json', 'build a feature', '--model', 'gpt-5.1', '--approval-mode', 'never', '--cd', 'C:\\repo', '--dangerously-bypass-approvals-and-sandbox'], 'helpful-gopher-42'),
+  ['exec', '--json', 'resume', 'helpful-gopher-42', '--model', 'gpt-5.1', '--approval-mode', 'never', '--cd', 'C:\\repo', '--dangerously-bypass-approvals-and-sandbox']
+)
+
 // --- buildGeminiResumeArgs ---
 
 assert(
@@ -192,13 +230,13 @@ assert(
 // Simulate what overnight does when rate limit fires on:
 //   overnight run -- claude -p "build a feature" --dangerously-skip-permissions
 const userArgs = ['-p', 'build a feature', '--dangerously-skip-permissions']
-const { args: withJson } = injectStreamJson(userArgs)
+const { args: withJson } = injectStreamJson(userArgs, true)
 const resumeArgs = buildResumeArgs(withJson, SESSION)
 
 assert(
   'Claude round-trip: original args → inject json → rate limit → resume command',
   ['claude', ...resumeArgs].join(' '),
-  `claude --resume ${SESSION} --output-format stream-json --dangerously-skip-permissions`
+  `claude --resume ${SESSION} --output-format stream-json --verbose --dangerously-skip-permissions`
 )
 
 // --- Full round-trip: Codex ---

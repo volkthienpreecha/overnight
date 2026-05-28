@@ -34,5 +34,6 @@ export function readEvents(limit = 50): OvernightEvent[] {
 }
 
 export function clearEvents(): void {
+  ensureDirs()
   fs.writeFileSync(EVENTS_PATH, '')
 }

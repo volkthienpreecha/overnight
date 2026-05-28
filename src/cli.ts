@@ -3,6 +3,15 @@ import chalk from 'chalk'
 
 const program = new Command()
 
+function parsePositiveInteger(value: string | undefined, flag: string): number | undefined {
+  if (value == null) return undefined
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`${flag} must be a positive whole number`)
+  }
+  return parsed
+}
+
 program
   .name('overnight')
   .description('Keep your coding agent running while you sleep')
@@ -22,7 +31,7 @@ program
     const remaining = cmd.args
     await runCommand(remaining, {
       verbose: opts.verbose,
-      hangTimeout: opts.hangTimeout ? parseInt(opts.hangTimeout) : undefined,
+      hangTimeout: parsePositiveInteger(opts.hangTimeout, '--hang-timeout'),
     })
   })
 
@@ -57,7 +66,7 @@ program
   .action(async (opts) => {
     const { logCommand } = await import('./commands/log.js')
     logCommand({
-      tail: parseInt(opts.tail),
+      tail: parsePositiveInteger(opts.tail, '--tail'),
       type: opts.type,
       clear: opts.clear,
     })

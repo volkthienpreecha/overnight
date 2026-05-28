@@ -29,7 +29,7 @@ export async function demoCommand(): Promise<void> {
     '[agent] Writing src/feature.ts...',
     '[agent] Writing tests...',
     '[agent] Running type check...',
-    'Claude AI usage limit reached · resets in 12 seconds',
+    'Claude AI usage limit reached · resets in 6 seconds',
   ]
 
   let sessionId: string | null = null
@@ -44,15 +44,15 @@ export async function demoCommand(): Promise<void> {
         console.log(chalk.dim(`  overnight: session ${d.value.slice(0, 8)}…`))
       }
     }
-    await delay(650)
+    await delay(350)
   }
 
   // ── Rate limit handling ───────────────────────────────────────────────────
 
-  const resetAt = Date.now() + 12_000   // 12s wait for demo
+  const resetAt = Date.now() + 6_000   // short wait for demo
   const resumeCmd = `claude --resume ${sessionId} --output-format stream-json --verbose`
 
-  console.log(chalk.yellow(`\n🌙 overnight: Rate limit hit. Resuming at ${formatTime(resetAt)} (12s)`))
+  console.log(chalk.yellow(`\n🌙 overnight: Rate limit hit. Resuming at ${formatTime(resetAt)} (6s)`))
   await delay(300)
   console.log(chalk.dim('  overnight: checkpoint saved'))
   console.log(chalk.dim(`  overnight: waiting until ${formatTime(resetAt)}…`))
@@ -60,10 +60,11 @@ export async function demoCommand(): Promise<void> {
   // Live countdown
   const ticker = setInterval(() => {
     const remaining = formatResetIn(resetAt)
-    process.stdout.write(`\r  ⏳ ${remaining} remaining…`.padEnd(50))
+    const label = remaining === 'now' ? 'resuming now…' : `${remaining} remaining…`
+    process.stdout.write(`\r  ⏳ ${label}`.padEnd(50))
   }, 1000)
 
-  await waitUntil(resetAt + 1000)
+  await waitUntil(resetAt + 200)
   clearInterval(ticker)
   process.stdout.write('\r' + ' '.repeat(60) + '\r')
 
@@ -85,7 +86,7 @@ export async function demoCommand(): Promise<void> {
 
   for (const line of attempt2Lines) {
     process.stdout.write(line + '\n')
-    await delay(650)
+    await delay(350)
   }
 
   // ── Done ──────────────────────────────────────────────────────────────────

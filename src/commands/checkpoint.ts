@@ -3,7 +3,14 @@ import fs from 'fs'
 import path from 'path'
 import { CHECKPOINTS_DIR, ensureDirs } from '../lib/config.js'
 
-export function checkpointCommand(action: 'list' | 'show', id?: string): void {
+export function checkpointCommand(action: string, id?: string): void {
+  if (action !== 'list' && action !== 'show') {
+    console.error(chalk.red(`Unknown checkpoint action: ${action}`))
+    console.error('Usage: overnight checkpoint [list|show] [id]')
+    process.exitCode = 1
+    return
+  }
+
   ensureDirs()
 
   if (action === 'list') {

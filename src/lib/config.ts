@@ -16,7 +16,6 @@ export function ensureDirs(): void {
 }
 
 export function readConfig(): OvernightConfig {
-  ensureDirs()
   if (!fs.existsSync(CONFIG_PATH)) return { ...DEFAULT_CONFIG }
   try {
     const raw = fs.readFileSync(CONFIG_PATH, 'utf8')

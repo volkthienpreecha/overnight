@@ -21,19 +21,20 @@ export async function setupCommand(opts: SetupOptions): Promise<void> {
   p.intro(chalk.bold('🌙 overnight setup'))
 
   const config = readConfig()
+  let notificationConfigured = false
 
   if (opts.telegram || (!opts.slack && !opts.telegram)) {
-    await setupTelegram(config)
+    notificationConfigured = await setupTelegram(config, opts.telegram) || notificationConfigured
   }
 
   if (opts.slack || (!opts.telegram && !opts.slack)) {
     // Only ask about Slack if we haven't already set up Telegram (or explicitly requested)
     if (opts.slack) {
-      await setupSlack(config)
+      notificationConfigured = await setupSlack(config) || notificationConfigured
     } else if (!config.notifications.telegram) {
       const wantSlack = await p.confirm({ message: 'Also set up Slack notifications?' })
       if (p.isCancel(wantSlack)) { p.cancel('Setup cancelled'); process.exit(0) }
-      if (wantSlack) await setupSlack(config)
+      if (wantSlack) notificationConfigured = await setupSlack(config) || notificationConfigured
     }
   }
 
@@ -69,15 +70,19 @@ export async function setupCommand(opts: SetupOptions): Promise<void> {
   }
 
   writeConfig(config)
-  p.outro(chalk.green('overnight is configured! Run: overnight run -- claude -p "your task"'))
+  if (notificationConfigured || config.notifications.telegram || config.notifications.slack) {
+    p.outro(chalk.green('overnight is configured! Run: overnight run -- claude -p "your task"'))
+  } else {
+    p.outro(chalk.yellow('Setup finished, but no notification channel is connected. Run `overnight setup --telegram` to add one.'))
+  }
 }
 
-async function setupTelegram(config: OvernightConfig): Promise<void> {
+async function setupTelegram(config: OvernightConfig, explicit = false): Promise<boolean> {
   const wantTelegram = config.notifications.telegram
-    ? await p.confirm({ message: `Update existing Telegram config (bot: @…)?`, initialValue: false })
-    : await p.confirm({ message: 'Set up Telegram notifications?' })
+    ? explicit || await p.confirm({ message: 'Update existing Telegram config?', initialValue: false })
+    : explicit || await p.confirm({ message: 'Set up Telegram notifications?' })
 
-  if (p.isCancel(wantTelegram) || !wantTelegram) return
+  if (p.isCancel(wantTelegram) || !wantTelegram) return false
 
   p.note(
     '1. Open Telegram and message @BotFather\n2. Send /newbot and follow the steps\n3. Copy the bot token (looks like 123456:ABC-DEF…)',
@@ -86,10 +91,10 @@ async function setupTelegram(config: OvernightConfig): Promise<void> {
 
   const tokenInput = await p.text({
     message: 'Paste your bot token',
-    validate: v => (v.includes(':') ? undefined : 'Token format: 12345:ABC-DEF…'),
+    validate: v => (v.trim().includes(':') ? undefined : 'Token format: 12345:ABC-DEF…'),
   })
   if (p.isCancel(tokenInput)) { p.cancel('Setup cancelled'); process.exit(0) }
-  const botToken = tokenInput as string
+  const botToken = (tokenInput as string).trim()
 
   // Validate token
   const spinner = p.spinner()
@@ -101,7 +106,7 @@ async function setupTelegram(config: OvernightConfig): Promise<void> {
   } catch (err) {
     spinner.stop(chalk.red('Invalid token'))
     p.note((err as Error).message, 'Error')
-    return
+    return false
   }
 
   p.note(
@@ -118,7 +123,7 @@ async function setupTelegram(config: OvernightConfig): Promise<void> {
   } catch {
     waitSpinner.stop(chalk.red('Timed out — no message received'))
     p.note('Run `overnight setup --telegram` to try again', 'Try again')
-    return
+    return false
   }
 
   // Send test message
@@ -134,9 +139,10 @@ async function setupTelegram(config: OvernightConfig): Promise<void> {
   }
 
   config.notifications.telegram = { botToken, chatId }
+  return true
 }
 
-async function setupSlack(config: OvernightConfig): Promise<void> {
+async function setupSlack(config: OvernightConfig): Promise<boolean> {
   p.note(
     '1. Go to api.slack.com/apps → Your App → Incoming Webhooks\n2. Activate Incoming Webhooks\n3. Click "Add New Webhook to Workspace"\n4. Copy the webhook URL',
     'Create a Slack webhook',
@@ -144,10 +150,10 @@ async function setupSlack(config: OvernightConfig): Promise<void> {
 
   const webhookInput = await p.text({
     message: 'Paste your Slack webhook URL',
-    validate: v => (v.startsWith('https://hooks.slack.com/') ? undefined : 'Must start with https://hooks.slack.com/'),
+    validate: v => (v.trim().startsWith('https://hooks.slack.com/') ? undefined : 'Must start with https://hooks.slack.com/'),
   })
   if (p.isCancel(webhookInput)) { p.cancel('Setup cancelled'); process.exit(0) }
-  const webhookUrl = webhookInput as string
+  const webhookUrl = (webhookInput as string).trim()
 
   const spinner = p.spinner()
   spinner.start('Sending test message…')
@@ -155,9 +161,11 @@ async function setupSlack(config: OvernightConfig): Promise<void> {
     await validateSlackWebhook(webhookUrl)
     spinner.stop('Slack connected')
     config.notifications.slack = { webhookUrl }
+    return true
   } catch (err) {
     spinner.stop(chalk.red('Failed'))
     p.note((err as Error).message, 'Error')
+    return false
   }
 }
 
