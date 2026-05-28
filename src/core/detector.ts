@@ -64,6 +64,9 @@ const HUMAN_NEEDED_PATTERNS = [
 const SESSION_ID_PATTERN = /"session_id"\s*:\s*"([0-9a-f-]{36})"/i
 // camelCase variant used by some agents
 const SESSION_ID_CAMEL_PATTERN = /"sessionId"\s*:\s*"([0-9a-f-]{36})"/i
+// Codex JSON session event: {"type":"session","id":"thread-name-or-uuid","model":"..."}
+// The id can be a kebab-case thread name (e.g. helpful-gopher-42) or a UUID.
+const CODEX_SESSION_JSON_PATTERN = /"type"\s*:\s*"session"[^}]*"id"\s*:\s*"([a-z0-9][a-z0-9_-]{2,})"/i
 // Codex end-of-session message: "To continue this session, run codex exec resume abc-def-123"
 // Thread names are kebab-case words; UUIDs are hex with dashes.
 const CODEX_SESSION_PATTERN = /codex(?:\s+exec)?\s+resume\s+([a-z0-9][a-z0-9_-]{4,})/i
@@ -85,6 +88,7 @@ export function detectLine(line: string): Detection[] {
   const sessionMatch =
     SESSION_ID_PATTERN.exec(line) ??
     SESSION_ID_CAMEL_PATTERN.exec(line) ??
+    CODEX_SESSION_JSON_PATTERN.exec(line) ??
     CODEX_SESSION_PATTERN.exec(line)
   if (sessionMatch) {
     detections.push({ type: 'session_id', value: sessionMatch[1], raw: line })
@@ -142,6 +146,7 @@ export function extractSessionId(line: string): string | null {
   const m =
     SESSION_ID_PATTERN.exec(line) ??
     SESSION_ID_CAMEL_PATTERN.exec(line) ??
+    CODEX_SESSION_JSON_PATTERN.exec(line) ??
     CODEX_SESSION_PATTERN.exec(line)
   return m ? m[1] : null
 }
