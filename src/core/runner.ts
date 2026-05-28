@@ -44,6 +44,7 @@ function isGemini(command: string): boolean {
 // ---------------------------------------------------------------------------
 
 // Claude: --output-format stream-json
+// When -p / --print is present, Claude also requires --verbose for stream-json to work.
 function injectStreamJson(args: string[]): { args: string[]; injected: boolean } {
   const alreadySet = args.some(
     (a, i) =>
@@ -52,7 +53,13 @@ function injectStreamJson(args: string[]): { args: string[]; injected: boolean }
       (i > 0 && (args[i - 1] === '--output-format' || args[i - 1] === '-f') && a === 'stream-json'),
   )
   if (alreadySet) return { args, injected: false }
-  return { args: ['--output-format', 'stream-json', ...args], injected: true }
+
+  const hasPrint = args.some(a => a === '-p' || a === '--print')
+  const hasVerbose = args.some(a => a === '--verbose')
+  const toInject = ['--output-format', 'stream-json']
+  if (hasPrint && !hasVerbose) toInject.push('--verbose')
+
+  return { args: [...toInject, ...args], injected: true }
 }
 
 // Gemini: --output-format stream-json  (same flag as Claude)

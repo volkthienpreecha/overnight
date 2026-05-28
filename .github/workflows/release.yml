@@ -1,0 +1,68 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-binaries:
+    name: Build standalone binaries
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Build binaries (all platforms)
+        run: |
+          mkdir -p releases
+          npx pkg dist/cli.js \
+            --targets node22-win-x64,node22-macos-x64,node22-linux-x64 \
+            --config package.json \
+            --out-path releases
+
+          # Rename to include version tag
+          TAG=${GITHUB_REF#refs/tags/}
+          mv releases/overnight-cli-win.exe releases/overnight-${TAG}-win.exe 2>/dev/null || true
+          mv releases/overnight-cli-macos   releases/overnight-${TAG}-macos   2>/dev/null || true
+          mv releases/overnight-cli-linux   releases/overnight-${TAG}-linux   2>/dev/null || true
+          ls -lh releases/
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: releases/*
+          generate_release_notes: true
+          body: |
+            ## Install
+
+            ### Standalone binary (no Node.js required)
+
+            | Platform | File |
+            |---|---|
+            | Windows | `overnight-${{ github.ref_name }}-win.exe` |
+            | Mac | `overnight-${{ github.ref_name }}-macos` |
+            | Linux | `overnight-${{ github.ref_name }}-linux` |
+
+            **Windows:** Download the `.exe` and run it directly, or add to PATH.
+
+            **Mac/Linux:**
+            ```bash
+            chmod +x overnight-*-macos   # or -linux
+            sudo mv overnight-*-macos /usr/local/bin/overnight
+            ```
+
+            ### npm (requires Node.js 18+)
+            ```bash
+            npm install -g overnight-cli
+            ```

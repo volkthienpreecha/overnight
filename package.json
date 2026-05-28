@@ -33,7 +33,21 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "package": "npm run build && pkg dist/cli.js --config package.json --out-path releases",
+    "package:win": "npm run build && pkg dist/cli.js --targets node22-win-x64 --config package.json --out-path releases",
+    "package:mac": "npm run build && pkg dist/cli.js --targets node22-macos-x64 --config package.json --out-path releases",
+    "package:linux": "npm run build && pkg dist/cli.js --targets node22-linux-x64 --config package.json --out-path releases"
+  },
+  "pkg": {
+    "targets": [
+      "node22-win-x64",
+      "node22-macos-x64",
+      "node22-linux-x64"
+    ],
+    "outputPath": "releases",
+    "assets": [],
+    "scripts": []
   },
   "dependencies": {
     "@clack/prompts": "^0.8.2",
@@ -42,6 +56,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
+    "@yao-pkg/pkg": "^6.20.0",
     "tsup": "^8.1.0",
     "typescript": "^5.4.5"
   },

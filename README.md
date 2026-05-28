@@ -6,11 +6,33 @@ Your coding agent stops when it hits a rate limit. You wake up, nothing got done
 
 ## Install
 
+### Download (no Node.js required)
+
+Go to [Releases](https://github.com/volkthienpreecha/agent-watch/releases/latest) and grab the binary for your platform.
+
+**Windows** — download `overnight-vX.X.X-win.exe`, rename it to `overnight.exe`, drop it somewhere on your PATH.
+
+**Mac / Linux:**
+```bash
+chmod +x overnight-*-macos   # or -linux
+sudo mv overnight-*-macos /usr/local/bin/overnight
+```
+
+### npm (requires Node.js 18+)
+
 ```bash
 npm install -g overnight-cli
 ```
 
-The command is `overnight`.
+The command is `overnight` either way.
+
+## See it in action (15 seconds)
+
+```bash
+overnight demo
+```
+
+Walks through a full rate-limit cycle — session capture, countdown, auto-resume — using fake output so you don't need an agent or API key.
 
 ## Quick start
 
@@ -57,7 +79,7 @@ Each one picks up the same session after a rate limit so you don't lose context.
 | Human-needed alerts | ❌ | ❌ | ✅ |
 | Telegram / Slack | ❌ | ❌ | ✅ |
 | Windows support | ❌ | ❌ | ✅ |
-| npm install | ❌ | ❌ | ✅ |
+| Standalone binary | ❌ | ❌ | ✅ |
 | No tmux required | ❌ | ❌ | ✅ |
 
 ## How it works
@@ -86,6 +108,7 @@ overnight setup --telegram
 
 ```bash
 overnight run -- <command> [args]   # Watch any agent command
+overnight demo                      # See a simulated rate-limit cycle (no agent needed)
 overnight setup --telegram          # Set up Telegram
 overnight setup --slack             # Set up Slack
 overnight status                    # Show config and recent events
@@ -100,7 +123,7 @@ overnight uninstall                 # Remove config and hooks
 ## Flags
 
 ```bash
-overnight run -v -- <your command>              # Shows session ID and exact resume command
+overnight run -v -- <your command>                 # Shows session ID and exact resume command
 overnight run --hang-timeout 30 -- <your command>  # Alert if no output for 30s (useful for testing)
 ```
 

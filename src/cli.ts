@@ -72,6 +72,15 @@ program
     checkpointCommand(action, id)
   })
 
+// overnight demo
+program
+  .command('demo')
+  .description('Watch overnight handle a rate limit — no real agent needed')
+  .action(async () => {
+    const { demoCommand } = await import('./commands/demo.js')
+    await demoCommand()
+  })
+
 // overnight uninstall
 program
   .command('uninstall')
