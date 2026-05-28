@@ -1,8 +1,8 @@
 # overnight
 
-Claude Code stops when it hits a rate limit. You wake up, nothing got done.
+Your coding agent stops when it hits a rate limit. You wake up, nothing got done.
 
-`overnight` wraps your agent and keeps it running. Rate limits, crashes, hangs. When the limit clears it picks up the same session, not a fresh start. Works on Windows without tmux or WSL.
+`overnight` wraps your agent and keeps it running. Rate limits, crashes, hangs. When the limit clears it picks up the same session, not a fresh start. Works with Claude, Codex, and Gemini. Works on Windows without tmux or WSL.
 
 ## Install
 
@@ -20,6 +20,8 @@ overnight setup --telegram
 
 # Prefix your normal agent command with overnight run --
 overnight run -- claude -p "Build feature X" --dangerously-skip-permissions
+overnight run -- codex exec "Build feature X" --dangerously-bypass-approvals-and-sandbox
+overnight run -- gemini -p "Build feature X"
 ```
 
 Go to sleep. overnight handles the rest.
@@ -28,8 +30,8 @@ Go to sleep. overnight handles the rest.
 
 | Situation | What happens |
 |---|---|
-| Rate limit | Waits for the reset, resumes with `--resume SESSION_ID` |
-| Crash | Restarts up to 3 times, uses `--resume` to keep context |
+| Rate limit | Waits for the reset, resumes the same session (see agent table below) |
+| Crash | Restarts up to 3 times and resumes the same session if possible |
 | No output for 10 min | Sends an alert with the last 30 lines |
 | Auth prompt, merge conflict, y/n question | Sends an alert right away |
 | Task finishes | Sends a success ping |
@@ -78,7 +80,7 @@ overnight setup --telegram
 2. Paste the token into the wizard
 3. Send any message to your new bot
 4. overnight captures your chat ID
-5. Test message sent — you're done
+5. Test message sent. Done.
 
 ## Commands
 
@@ -98,8 +100,8 @@ overnight uninstall                 # Remove config and hooks
 ## Flags
 
 ```bash
-overnight run -v -- claude ...              # Shows session ID and exact resume command
-overnight run --hang-timeout 30 -- ...      # Alert if no output for 30s (useful for testing)
+overnight run -v -- <your command>              # Shows session ID and exact resume command
+overnight run --hang-timeout 30 -- <your command>  # Alert if no output for 30s (useful for testing)
 ```
 
 ## Claude Code status bar
