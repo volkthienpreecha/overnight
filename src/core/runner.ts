@@ -36,6 +36,19 @@ function isClaude(command: string): boolean {
   return /\bclaude\b/.test(command)
 }
 
+// Ensure Claude outputs stream-json so overnight can extract the session ID.
+// Without this flag Claude emits human-readable text and we never see the UUID.
+function injectStreamJson(args: string[]): { args: string[]; injected: boolean } {
+  const alreadySet = args.some(
+    (a, i) =>
+      a === '--output-format' ||
+      a === '-f' ||
+      (i > 0 && (args[i - 1] === '--output-format' || args[i - 1] === '-f') && a === 'stream-json'),
+  )
+  if (alreadySet) return { args, injected: false }
+  return { args: ['--output-format', 'stream-json', ...args], injected: true }
+}
+
 async function spawnAndWatch(
   command: string,
   args: string[],
