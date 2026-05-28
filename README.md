@@ -2,7 +2,7 @@
 
 Claude Code stops when it hits a rate limit. You wake up, nothing got done.
 
-`overnight` wraps your agent and handles it. Rate limits, crashes, hangs. When the limit clears it picks up right where it left off using the actual session ID, not a restart from scratch. Works on Windows without tmux or WSL.
+`overnight` wraps your agent and keeps it running. Rate limits, crashes, hangs. When the limit clears it picks up the same session, not a fresh start. Works on Windows without tmux or WSL.
 
 ## Install
 
@@ -10,40 +10,39 @@ Claude Code stops when it hits a rate limit. You wake up, nothing got done.
 npm install -g overnight-cli
 ```
 
-The command is still `overnight`.
+The command is `overnight`.
 
 ## Quick start
 
 ```bash
-# Optional but worth it: set up Telegram so it pings you
+# Set up Telegram so it pings you (optional but worth it)
 overnight setup --telegram
 
-# Then just prefix your normal claude command
+# Prefix your normal agent command with overnight run --
 overnight run -- claude -p "Build feature X" --dangerously-skip-permissions
 ```
 
-That's it. Go to sleep.
+Go to sleep. overnight handles the rest.
 
 ## What it does
 
-| Situation | What overnight does |
+| Situation | What happens |
 |---|---|
 | Rate limit | Waits for the reset, resumes with `--resume SESSION_ID` |
 | Crash | Restarts up to 3 times, uses `--resume` to keep context |
 | No output for 10 min | Sends an alert with the last 30 lines |
-| Auth prompt / merge conflict / y-n question | Sends an alert right away |
+| Auth prompt, merge conflict, y/n question | Sends an alert right away |
 | Task finishes | Sends a success ping |
 
 ## Works with Claude, Codex, and Gemini
 
-Each agent uses its own native resume so you don't lose context on a long task.
+Each one picks up the same session after a rate limit so you don't lose context.
 
 | | Claude Code | Codex CLI | Gemini CLI |
 |---|---|---|---|
 | Rate-limit detection | ✅ | ✅ | ✅ |
 | Resumes same session | ✅ `--resume SESSION_ID` | ✅ `exec resume SESSION_ID` | ✅ `--resume SESSION_ID` |
 | Parses exact wait time | ✅ | ✅ | ✅ |
-| Auto-injects JSON output | ✅ `--output-format stream-json` | ✅ `--json` | ✅ `--output-format stream-json` |
 
 ## How overnight compares
 
@@ -61,25 +60,25 @@ Each agent uses its own native resume so you don't lose context on a long task.
 
 ## How it works
 
-overnight spawns your agent as a child process and pipes the output through normally. In the background it:
+overnight runs your command and passes all output through to your terminal. Behind the scenes it:
 
-1. Injects `--output-format stream-json` (or the equivalent for each agent) so it can read the session ID from the output
-2. Watches for rate-limit messages using patterns sourced from each agent's actual error strings
-3. On rate limit: saves the last 30 lines as a checkpoint, waits until the exact reset time, then runs `claude --resume SESSION_ID` (or the Codex / Gemini equivalent) to continue the same session
+1. Injects the right flag for each agent so it can capture the session ID (`--output-format stream-json` for Claude and Gemini, `--json` for Codex)
+2. Watches the output for rate-limit messages using the exact error strings each agent produces
+3. On rate limit: saves a checkpoint, waits until the reset, then resumes the same session with `--resume SESSION_ID`
 4. On crash: backs off and restarts, reusing `--resume` if a session ID was captured
-5. On silence: monitors for auth prompts, merge conflicts, and other patterns that mean the agent is stuck
+5. On silence: checks for auth prompts, merge conflicts, and anything else that means it needs you
 
-## Telegram setup (5 steps)
+## Telegram setup
 
 ```bash
 overnight setup --telegram
 ```
 
-1. Message [@BotFather](https://t.me/botfather) on Telegram, send `/newbot`, copy the token
+1. Message [@BotFather](https://t.me/botfather), send `/newbot`, copy the token
 2. Paste the token into the wizard
 3. Send any message to your new bot
-4. overnight captures your chat ID automatically
-5. Test message sent
+4. overnight captures your chat ID
+5. Test message sent — you're done
 
 ## Commands
 
@@ -96,14 +95,14 @@ overnight checkpoint show           # Show the latest checkpoint
 overnight uninstall                 # Remove config and hooks
 ```
 
-## Flags for overnight run
+## Flags
 
 ```bash
-overnight run -v -- claude ...              # Verbose: shows session ID and resume command
-overnight run --hang-timeout 30 -- ...      # Alert if no output for 30 seconds (good for testing)
+overnight run -v -- claude ...              # Shows session ID and exact resume command
+overnight run --hang-timeout 30 -- ...      # Alert if no output for 30s (useful for testing)
 ```
 
-## Claude Code status bar hook
+## Claude Code status bar
 
 `overnight setup` can install a hook into `~/.claude/settings.json`:
 
@@ -111,15 +110,15 @@ overnight run --hang-timeout 30 -- ...      # Alert if no output for 30 seconds 
 { "statusLine": "~/.overnight/hook.js" }
 ```
 
-This makes overnight read the exact rate-limit reset time from Claude's structured data instead of parsing text. It also shows context usage in Claude's status bar: `🌙 overnight | ctx: 73%`
+This lets overnight read the exact reset time from Claude's session data instead of guessing from text output. It also adds a usage indicator to Claude's status bar: `🌙 overnight | ctx: 73%`
 
 ## Windows
 
-Works on Windows PowerShell and Command Prompt without any extra setup. No tmux, no WSL, no admin rights needed.
+Works on Windows PowerShell and Command Prompt. No tmux, no WSL, no admin rights.
 
 ## Contributing
 
-Node.js 18+, TypeScript, no native modules.
+Node.js 18+, TypeScript, no native modules. [GitHub repo](https://github.com/volkthienpreecha/agent-watch)
 
 ```bash
 git clone https://github.com/volkthienpreecha/agent-watch
@@ -129,14 +128,14 @@ npm run build
 node dist/cli.js run -- echo "test"
 ```
 
-To test specific features:
+Test specific features:
 
 ```bash
-node test/verify-resume-args.js                                    # Unit tests for resume logic
-node dist/cli.js run -- node test/simulate-crash-then-complete.js  # Crash recovery
+node test/verify-resume-args.js                                      # Unit tests for resume logic
+node dist/cli.js run -- node test/simulate-crash-then-complete.js    # Crash recovery
 node dist/cli.js run --hang-timeout 5 -- node test/simulate-hang.js  # Hang detection
-node dist/cli.js run -- node test/simulate-codex-rate-limit.js     # Codex rate limit
-node dist/cli.js run -- node test/simulate-gemini-rate-limit.js    # Gemini rate limit
+node dist/cli.js run -- node test/simulate-codex-rate-limit.js       # Codex rate limit
+node dist/cli.js run -- node test/simulate-gemini-rate-limit.js      # Gemini rate limit
 ```
 
 ## License
